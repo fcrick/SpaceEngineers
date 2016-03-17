@@ -76,6 +76,8 @@ namespace Sandbox.Game.Gui
 
         protected void SelectFirstHandItem()
         {
+            if (MySession.LocalCharacter == null)
+                return;
 
             MyCharacter playerCharacter = MySession.LocalCharacter;
             var weapon = playerCharacter.CurrentWeapon;

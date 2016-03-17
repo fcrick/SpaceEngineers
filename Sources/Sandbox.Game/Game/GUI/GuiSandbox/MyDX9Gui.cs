@@ -297,6 +297,10 @@ namespace Sandbox.Graphics.GUI
                     return;
                 }
 
+                if (newPressf2) {
+                    MyPlayerCollection.RespawnRequest(joinGame: MySession.LocalCharacter == null, newPlayer: false, medicalId: 0, shipPrefabId: null);
+                }
+
                 if (MyInput.Static.IsNewKeyPressed(MyKeys.H) && MyInput.Static.IsAnyCtrlKeyPressed())
                 {
                     if (MyFakes.ENABLE_NETGRAPH)

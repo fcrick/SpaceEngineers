@@ -47,7 +47,7 @@ namespace Sandbox.Game.Entities
             if (broadcaster.Parent is MyCubeBlock)
             {
                 MyCubeGrid grid = (broadcaster.Parent as MyCubeBlock).CubeGrid;
-                Debug.Assert(grid.InScene, "adding broadcaster when grid is not in scene");
+                //Debug.Assert(grid.InScene, "adding broadcaster when grid is not in scene");
             }
             if (broadcaster.RadioProxyID == MyConstants.PRUNING_PROXY_ID_UNITIALIZED)
             {

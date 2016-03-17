@@ -1771,11 +1771,11 @@ namespace Sandbox.Game.World
                 return;
 
             bool controllingCockpit = MySession.ControlledEntity != null && MySession.ControlledEntity is MyCockpit;
-            bool isHereCharacter = MyEntities.GetEntities().OfType<MyCharacter>().Any();
+            bool isHereCharacter = MyEntities.GetEntities().OfType<MyCharacter>().Any(myChar => ((MyCharacter)myChar).ControllerInfo.Controller != null);
             bool isRemoteControllingFromCockpit = MySession.ControlledEntity != null && MySession.ControlledEntity is MyRemoteControl && (MySession.ControlledEntity as MyRemoteControl).WasControllingCockpitWhenSaved();
             bool isControllingTurretFromCockpit = MySession.ControlledEntity != null && MySession.ControlledEntity is MyLargeTurretBase && (MySession.ControlledEntity as MyLargeTurretBase).WasControllingCockpitWhenSaved();
 
-            if (!MyInput.Static.ENABLE_DEVELOPER_KEYS && !controllingCockpit && !isHereCharacter && !isRemoteControllingFromCockpit && !isControllingTurretFromCockpit)
+            if (!controllingCockpit && !isHereCharacter && !isRemoteControllingFromCockpit && !isControllingTurretFromCockpit)
             {
                 MyPlayerCollection.RequestLocalRespawn();
             }

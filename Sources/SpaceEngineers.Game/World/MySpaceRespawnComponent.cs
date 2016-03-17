@@ -551,7 +551,7 @@ namespace SpaceEngineers.Game.Players
                 if (block != null)
                 {
                     if (!block.IsWorking) continue;
-                    if (identityId.HasValue && !block.GetUserRelationToOwner(identityId.Value).IsFriendly()) continue;
+                    //if (identityId.HasValue && !block.GetUserRelationToOwner(identityId.Value).IsFriendly()) continue;
 
                     float distanceFromCenter = (float)block.PositionComp.GetPosition().Length();
 

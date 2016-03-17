@@ -131,7 +131,7 @@ namespace VRageRender
             DeviceCreationFlags flags = DeviceCreationFlags.None;
       
     #if DEBUG_DEVICE    
-            flags |= DeviceCreationFlags.Debug;
+            //flags |= DeviceCreationFlags.Debug;
     #endif
 
             WinApi.DEVMODE mode = new WinApi.DEVMODE();
@@ -154,7 +154,7 @@ namespace VRageRender
                 BackBufferWidth = mode.dmPelsWidth,
                 WindowMode = MyWindowModeEnum.Fullscreen,
                 RefreshRate = 60000,
-                VSync = false,
+                VSync = true,
             };
             m_settings = settings;
 

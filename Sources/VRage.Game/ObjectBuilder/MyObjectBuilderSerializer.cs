@@ -103,6 +103,9 @@ namespace VRage.ObjectBuilders
 
         public static XmlSerializer GetSerializer(string serializedName)
         {
+            if (serializedName == "MyObjectBuilder_AirtightSlideDoorDefinition")
+                serializedName = "MyObjectBuilder_AdvancedDoorDefinition";
+
             return m_serializersBySerializedName[serializedName];
         }
 

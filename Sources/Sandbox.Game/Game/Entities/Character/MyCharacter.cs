@@ -2030,7 +2030,7 @@ namespace Sandbox.Game.Entities.Character
             if (m_headLocalXAngle != angle)
             {
                 m_headLocalXAngle = angle;
-                if (updateSync)
+                if (updateSync && SyncObject != null)
                 {
                     SyncObject.ChangeHeadOrSpine(m_headLocalXAngle, m_headLocalYAngle,
                         Quaternion.Zero,
@@ -2044,7 +2044,7 @@ namespace Sandbox.Game.Entities.Character
             if (m_headLocalYAngle != angle)
             {
                 m_headLocalYAngle = angle;
-                if (updateSync)
+                if (updateSync && SyncObject != null)
                 {
                     SyncObject.ChangeHeadOrSpine(m_headLocalXAngle, m_headLocalYAngle,
                         Quaternion.Zero,

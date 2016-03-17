@@ -69,7 +69,7 @@ namespace Sandbox
             logName.Append(".log");
 
             var rootPath = new FileInfo(MyFileSystem.ExePath).Directory.FullName;
-            var contentPath = Path.Combine(rootPath, "Content");
+            var contentPath = Path.Combine(rootPath, "Content", "Content");
 
             MyFileSystem.Init(contentPath, userDataPath);
 

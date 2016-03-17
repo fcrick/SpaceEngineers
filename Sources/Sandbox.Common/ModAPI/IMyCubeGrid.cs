@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using VRage.Game;
 using VRage.ModAPI;
 
 
@@ -28,7 +29,7 @@ namespace Sandbox.ModAPI
         /// </summary>
         /// <param name="playerId">new owner id</param>
         /// <param name="shareMode">new share mode</param>
-        void ChangeGridOwnership(long playerId, Sandbox.Common.ObjectBuilders.MyOwnershipShareModeEnum shareMode);
+        void ChangeGridOwnership(long playerId, MyOwnershipShareModeEnum shareMode);
 
         //void ChangeOwner(IMyCubeBlock block, long oldOwner, long newOwner); //This just updates owner counters, called by fatblock.changeowner
 
@@ -104,7 +105,7 @@ namespace Sandbox.ModAPI
         /// <summary>
         /// Grid size enumeration
         /// </summary>
-        Sandbox.Common.ObjectBuilders.MyCubeSize GridSizeEnum { get; set; }
+        MyCubeSize GridSizeEnum { get; set; }
 
         /// <summary>
         /// Station = static
@@ -243,6 +244,14 @@ namespace Sandbox.ModAPI
 
         void UpdateOwnership(long ownerId, bool isFunctional);
         VRageMath.Vector3I WorldToGridInteger(VRageMath.Vector3D coords);
+
+        /// <summary>
+        /// Add a cubeblock to the grid
+        /// </summary>
+        /// <param name="objectBuilder">Object builder of cube to add</param>
+        /// <param name="testMerge">test for grid merging</param>
+        /// <returns></returns>
+        IMySlimBlock AddBlock(MyObjectBuilder_CubeBlock objectBuilder, bool testMerge);
 
         //Missing dependencies
         //void BuildBlocks(long buildBy, ref IMyCubeGrid.MyBlockBuildArea area);

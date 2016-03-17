@@ -19,10 +19,12 @@ namespace VRage.Network
 
         public bool HasClientFlag { get { return (CallSiteFlags & CallSiteFlags.Client) == CallSiteFlags.Client; } }
         public bool HasServerFlag { get { return (CallSiteFlags & CallSiteFlags.Server) == CallSiteFlags.Server; } }
+        public bool HasExceptLocalFlag { get { return (CallSiteFlags & CallSiteFlags.ExceptLocal) == CallSiteFlags.ExceptLocal; } }
         public bool HasBroadcastFlag { get { return (CallSiteFlags & CallSiteFlags.Broadcast) == CallSiteFlags.Broadcast; } }
         public bool HasBroadcastExceptFlag { get { return (CallSiteFlags & CallSiteFlags.BroadcastExcept) == CallSiteFlags.BroadcastExcept; } }
         public bool HasRefreshReplicableFlag { get { return (CallSiteFlags & CallSiteFlags.RefreshReplicable) == CallSiteFlags.RefreshReplicable; } }
         public bool IsReliable { get { return (CallSiteFlags & CallSiteFlags.Reliable) == CallSiteFlags.Reliable; } }
+        public bool IsBlocking { get { return (CallSiteFlags & CallSiteFlags.Blocking) == CallSiteFlags.Blocking; } }
 
         public CallSite(MySynchronizedTypeInfo owner, uint id, MethodInfo info, CallSiteFlags flags)
         {

@@ -25,12 +25,56 @@ using VRage;
 using VRage.Collections;
 using VRage.ModAPI;
 using VRage.Utils;
+using VRage.Network;
+using Sandbox.Engine.Multiplayer;
+using VRage.Game;
 
 namespace Sandbox.Game.Entities.Blocks
 {
     [MyCubeBlockType(typeof(MyObjectBuilder_MyProgrammableBlock))]
     class MyProgrammableBlock : MyFunctionalBlock, IMyProgrammableBlock
     {
+        /// <summary>
+        /// Determines why (if at all) a script was terminated.
+        /// </summary>
+        public enum ScriptTerminationReason
+        {
+            /// <summary>
+            /// The script was not terminated.
+            /// </summary>
+            None,
+
+            /// <summary>
+            /// There is no script (assembly) available.
+            /// </summary>
+            NoScript,
+
+            /// <summary>
+            /// No entry point (void Main(), void Main(string argument)) could be found.
+            /// </summary>
+            NoEntryPoint,
+
+            /// <summary>
+            /// The maximum allowed number of instructions has been reached.
+            /// </summary>
+            InstructionOverflow,
+
+            /// <summary>
+            /// The programmable block has changed ownership and must be rebuilt.
+            /// </summary>
+            OwnershipChange,
+
+            /// <summary>
+            /// A runtime exception happened during the execution of the script.
+            /// </summary>
+            RuntimeException,
+
+            /// <summary>
+            /// The script is already running (technically not a termination reason, but will be returned if a script tries to run itself in a nested fashion).
+            /// </summary>
+            AlreadyRunning
+        }
+
         private const int MAX_NUM_EXECUTED_INSTRUCTIONS = 50000;
 		private const int MAX_NUM_METHOD_CALLS = 10000;
         private const int MAX_ECHO_LENGTH = 8000; // 100 lines á 80 characters
@@ -42,14 +86,13 @@ namespace Sandbox.Game.Entities.Blocks
         private string m_terminalRunArgument = string.Empty;
         private StringBuilder m_echoOutput = new StringBuilder();
         private long m_previousRunTimestamp = 0;
-        
-        private readonly object[] m_argumentArray = new object[1]; 
 
         public bool ConsoleOpen = false;
         MyGuiScreenEditor m_editorScreen;
         Assembly m_assembly = null;
         List<string> m_compilerErrors = new List<string>();
-        private bool m_wasTerminated = false;
+        private ScriptTerminationReason m_terminationReason = ScriptTerminationReason.None;
+        //private bool m_wasTerminated = false;
         private bool m_isRunning = false;
         private bool m_mainMethodSupportsArgument;
         public bool ConsoleOpenRequest = false;
@@ -60,6 +103,27 @@ namespace Sandbox.Game.Entities.Blocks
         {
             get { return this.m_terminalRunArgument; }
             set { this.m_terminalRunArgument = value ?? string.Empty; }
+        }
+
+        bool IMyProgrammableBlock.TryRun(string argument)
+        {
+            // If we find some reason why a run couldn't possibly work, return false
+            if (m_instance == null || m_isRunning || this.IsWorking == false || this.IsFunctional == false)
+            {
+                return false;
+            }
+
+            if (!IsFunctional || !IsWorking)
+            {
+                return false;
+            }
+
+            string response;
+            var result = this.ExecuteCode(argument ?? "", out response);
+            SetDetailedInfo(response);
+            if (result == ScriptTerminationReason.InstructionOverflow)
+                throw new ScriptOutOfRangeException();
+            return result == ScriptTerminationReason.None;
         }
 
         public ulong UserId
@@ -158,21 +222,31 @@ namespace Sandbox.Game.Entities.Blocks
             }
             m_editorData = m_programData = m_editorScreen.Description.Text.ToString();
             m_compilerErrors.Clear();
+            // If there is an existing instance, make sure the storage data is updated before sending
+            // an update request
+            if (m_instance != null)
+            {
+                m_storageData = m_instance.Storage;
+            }
             SyncObject.SendUpdateProgramRequest(m_programData, m_storageData);
         }
 
         public void SendRecompile()
         {
-            SyncObject.SendProgramRecompile();
+            MyMultiplayer.RaiseEvent(this, x => x.Recompile);  
         }
 
-        public void Recompile()
+        [Event, Reliable, Server]
+        void Recompile()
         {
             m_compilerErrors.Clear();
-            if (Sync.IsServer)
+            // If there is an existing instance, make sure the storage data is updated before 
+            // rebuilding the program.
+            if (m_instance != null)
             {
-                CompileAndCreateInstance(m_programData, m_storageData);
+                m_storageData = m_instance.Storage;
             }
+            CompileAndCreateInstance(m_programData, m_storageData);
         }
 
         private void SaveCode(ResultEnum result)
@@ -224,25 +298,29 @@ namespace Sandbox.Game.Entities.Blocks
             }
         }
 
-        public string ExecuteCode(string argument)
+        public ScriptTerminationReason ExecuteCode(string argument, out string response)
         {
             if (m_isRunning)
             {
-                return MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_AllreadyRunning);
+                response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_AllreadyRunning);
+                return ScriptTerminationReason.AlreadyRunning;
             }
-            if (m_wasTerminated == true)
+            if (m_terminationReason != ScriptTerminationReason.None)
             {
-                return DetailedInfo.ToString();
+                response = DetailedInfo.ToString();
+                return m_terminationReason;
             }
             DetailedInfo.Clear();
             m_echoOutput.Clear();
             if (m_assembly == null)
             {
-                return MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NoAssembly);
+                response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NoAssembly);
+                return ScriptTerminationReason.NoScript;
             }
             if (!m_instance.HasMainMethod)
             {
-                return MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NoMain);
+                response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NoMain);
+                return ScriptTerminationReason.NoEntryPoint;
             }
             if (m_previousRunTimestamp == 0)
             {
@@ -262,14 +340,15 @@ namespace Sandbox.Game.Entities.Blocks
             m_instance.GridTerminalSystem = terminalSystem;
 
             m_isRunning = true;
-            string retVal = "";
-            IlInjector.RestartCountingInstructions(MAX_NUM_EXECUTED_INSTRUCTIONS);
-			IlInjector.RestartCountingMethods(MAX_NUM_METHOD_CALLS);
+            response = "";
             try
             {
-                m_instance.Main(argument);
+                using (IlInjector.BeginRunBlock(MAX_NUM_EXECUTED_INSTRUCTIONS, MAX_NUM_METHOD_CALLS))
+                {
+                    m_instance.Main(argument);
+                }
                 if (m_echoOutput.Length > 0)
-                    retVal = m_echoOutput.ToString();
+                    response = m_echoOutput.ToString();
             }
             catch (Exception ex)
             {
@@ -277,24 +356,37 @@ namespace Sandbox.Game.Entities.Blocks
                 // fashioned string concatenation here. We'll still want the echo
                 // output, since its primary purpose is debugging.
                 if (m_echoOutput.Length > 0)
-                    retVal = m_echoOutput.ToString();
-                OnProgramTermination();
+                    response = m_echoOutput.ToString();
                 if (ex is ScriptOutOfRangeException)
                 {
-                    retVal += MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_TooComplex);
+                    if (IlInjector.IsWithinRunBlock())
+                    {
+                        // If we're within a nested run, we don't reset the program, we just pass the error
+                        response += MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NestedTooComplex);
+                        return ScriptTerminationReason.InstructionOverflow;
+                    }
+                    else
+                    {
+                        response += MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_TooComplex);
+                        OnProgramTermination(ScriptTerminationReason.InstructionOverflow);
+                    }
                 }
                 else
                 {
-                    retVal += MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_ExceptionCaught) + ex.Message;
+                    response += MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_ExceptionCaught) + ex.Message;
+                    OnProgramTermination(ScriptTerminationReason.RuntimeException);
                 }
             }
-            m_isRunning = false;
-            return retVal;
+            finally
+            {
+                m_isRunning = false;
+            }
+            return m_terminationReason;
         }
 
-        private void OnProgramTermination()
+        private void OnProgramTermination(ScriptTerminationReason reason)
         {
-            m_wasTerminated = true;
+            m_terminationReason = reason;
             m_instance = null;
             m_assembly = null;
             m_echoOutput.Clear();
@@ -314,12 +406,9 @@ namespace Sandbox.Game.Entities.Blocks
             }
             if (Sync.IsServer)
             {
-                string response = this.ExecuteCode(argument);
-                if (this.DetailedInfo.ToString() != response)
-                {
-                    this.SyncObject.SendProgramResponseMessage(response);
-                    this.WriteProgramResponse(response);
-                }
+                string response;
+                this.ExecuteCode(argument, out response);
+                SetDetailedInfo(response);
             }
             else
             {
@@ -327,8 +416,26 @@ namespace Sandbox.Game.Entities.Blocks
             }
         }
 
+        private void SetDetailedInfo(string detailedInfo)
+        {
+            if (this.DetailedInfo.ToString() != detailedInfo)
+            {
+                MyMultiplayer.RaiseEvent(this, x => x.WriteProgramResponse, detailedInfo);
+            }
+        }
+
         public override void Init(MyObjectBuilder_CubeBlock objectBuilder, MyCubeGrid cubeGrid)
         {
+            var blockDefinition = BlockDefinition as MyProgrammableBlockDefinition;
+
+            var sinkComp = new MyResourceSinkComponent();
+            sinkComp.Init(
+              blockDefinition.ResourceSinkGroup,
+              0.0005f,
+              () => (Enabled && IsFunctional) ? ResourceSink.MaxRequiredInput : 0f);
+            sinkComp.IsPoweredChanged += PowerReceiver_IsPoweredChanged;
+            ResourceSink = sinkComp;
+
             base.Init(objectBuilder, cubeGrid);
             var programmableBlockBuilder = (MyObjectBuilder_MyProgrammableBlock)objectBuilder;
             m_editorData = m_programData = programmableBlockBuilder.Program;
@@ -337,18 +444,8 @@ namespace Sandbox.Game.Entities.Blocks
 
             this.SyncObject = new MySyncProgrammableBlock(this);
             NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
-
-	        var blockDefinition = BlockDefinition as MyProgrammableBlockDefinition;
-
-			var sinkComp = new MyResourceSinkComponent();
-            sinkComp.Init(
-              blockDefinition.ResourceSinkGroup,
-              0.0005f,
-              () => (Enabled && IsFunctional) ? ResourceSink.MaxRequiredInput : 0f);
-			sinkComp.IsPoweredChanged += PowerReceiver_IsPoweredChanged;
-	        ResourceSink = sinkComp;
+	    	
 			ResourceSink.Update();
-
 
             SlimBlock.ComponentStack.IsFunctionalChanged += ComponentStack_IsFunctionalChanged;
             IsWorkingChanged += MyProgrammableBlock_IsWorkingChanged;
@@ -366,8 +463,7 @@ namespace Sandbox.Game.Entities.Blocks
                 string response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_NotAllowed);
                 if (Sync.IsServer)
                 {
-                    SyncObject.SendProgramResponseMessage(response);
-                    WriteProgramResponse(response);
+                    MyMultiplayer.RaiseEvent(this, x => x.WriteProgramResponse, response);   
                 }
                 else
                 {
@@ -377,6 +473,12 @@ namespace Sandbox.Game.Entities.Blocks
             }
             if (m_programData != null)
             {
+                // If there is an existing instance, make sure the storage data is updated before sending
+                // an update request
+                if (m_instance != null)
+                {
+                    m_storageData = m_instance.Storage;
+                }
                 SyncObject.SendUpdateProgramRequest(m_programData, m_storageData);
             }
             UpdateEmissivity();
@@ -400,23 +502,24 @@ namespace Sandbox.Game.Entities.Blocks
             {
                 return;
             }
-            m_wasTerminated = false;
-            Assembly temp = null;
-            MyGuiScreenEditor.CompileProgram(program, m_compilerErrors, ref temp);
-            if (temp != null)
+            m_terminationReason = ScriptTerminationReason.None;
+            try
             {
-                try
+                Assembly temp = null;
+                MyGuiScreenEditor.CompileProgram(program, m_compilerErrors, ref temp);
+                if (temp != null)
                 {
-					m_assembly = IlInjector.InjectCodeToAssembly("IngameScript_safe", temp, typeof(IlInjector).GetMethod("CountInstructions", BindingFlags.Public | BindingFlags.Static), typeof(IlInjector).GetMethod("CountMethodCalls", BindingFlags.Public | BindingFlags.Static));
+                    m_assembly = IlInjector.InjectCodeToAssembly("IngameScript_safe", temp, typeof(IlInjector).GetMethod("CountInstructions", BindingFlags.Public | BindingFlags.Static), typeof(IlInjector).GetMethod("CountMethodCalls", BindingFlags.Public | BindingFlags.Static));
 
                     var type = m_assembly.GetType("Program");
                     if (type != null)
                     {
-                        IlInjector.RestartCountingInstructions(MAX_NUM_EXECUTED_INSTRUCTIONS);
-						IlInjector.RestartCountingMethods(MAX_NUM_METHOD_CALLS);
                         try
                         {
-                            m_instance = Activator.CreateInstance(type) as IMyGridProgram;
+                            using (IlInjector.BeginRunBlock(MAX_NUM_EXECUTED_INSTRUCTIONS, MAX_NUM_METHOD_CALLS))
+                            {
+                                m_instance = Activator.CreateInstance(type) as IMyGridProgram;
+                            }
                             if (m_instance != null)
                             {
                                 m_previousRunTimestamp = 0;
@@ -432,23 +535,20 @@ namespace Sandbox.Game.Entities.Blocks
                                 string response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_ExceptionCaught) + ex.InnerException.Message;
                                 if (DetailedInfo.ToString() != response)
                                 {
-                                    SyncObject.SendProgramResponseMessage(response);
-                                    WriteProgramResponse(response);
+                                    MyMultiplayer.RaiseEvent(this, x => x.WriteProgramResponse, response);   
                                 }
                             }
                         }
                     }
                 }
-                catch (Exception ex)
+            }
+            catch (Exception ex)
+            {
+                string response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_ExceptionCaught) + ex.Message;
+                if (DetailedInfo.ToString() != response)
                 {
-                    string response = MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_ExceptionCaught) + ex.Message;
-                    if (DetailedInfo.ToString() != response)
-                    {
-                        SyncObject.SendProgramResponseMessage(response);
-                        WriteProgramResponse(response);
-                    }
+                    MyMultiplayer.RaiseEvent(this, x => x.WriteProgramResponse, response);   
                 }
-
             }
         }
 
@@ -487,7 +587,7 @@ namespace Sandbox.Game.Entities.Blocks
                                  messageText: new StringBuilder("Editor is opened by another player.")));
         }
 
-        public void UpdateProgram(string program,string storage)
+        public void UpdateProgram(string program, string storage)
         {
             this.m_editorData = this.m_programData = program;
             this.m_storageData = storage;
@@ -498,7 +598,8 @@ namespace Sandbox.Game.Entities.Blocks
             }
         }
 
-        public void WriteProgramResponse(string response)
+        [Event,Reliable,Server,Broadcast]
+        void WriteProgramResponse(string response)
         {
             DetailedInfo.Clear();
             DetailedInfo.Append(response);
@@ -514,11 +615,10 @@ namespace Sandbox.Game.Entities.Blocks
             //In survival mode, the new owner needs to recompile the script to be able to run it
             if (MySession.Static.SurvivalMode)
             {
-                OnProgramTermination();
-                SyncObject.SendProgramResponseMessage(MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_Ownershipchanged));
+                OnProgramTermination(ScriptTerminationReason.OwnershipChange);
                 if (Sync.IsServer)
                 {
-                    WriteProgramResponse(MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_Ownershipchanged));
+                    MyMultiplayer.RaiseEvent(this, x => x.WriteProgramResponse, MyTexts.GetString(MySpaceTexts.ProgrammableBlock_Exception_Ownershipchanged));
                 }
             }
         }

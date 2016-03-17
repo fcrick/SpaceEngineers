@@ -136,12 +136,18 @@ namespace VRage.Network
             var serverAttribute = info.GetCustomAttribute<ServerAttribute>();
 
             CallSiteFlags flags = CallSiteFlags.None;
-            if (serverAttribute != null) flags |= CallSiteFlags.Server;
+            if (serverAttribute != null)
+            {
+                flags |= CallSiteFlags.Server;
+                if (serverAttribute.ExceptLocal)
+                    flags |= CallSiteFlags.ExceptLocal;
+            }
             if (info.HasAttribute<ClientAttribute>()) flags |= CallSiteFlags.Client;
             if (info.HasAttribute<BroadcastAttribute>()) flags |= CallSiteFlags.Broadcast;
-            if (info.HasAttribute<BroadcastExeptAttribute>()) flags |= CallSiteFlags.BroadcastExcept;
+            if (info.HasAttribute<BroadcastExceptAttribute>()) flags |= CallSiteFlags.BroadcastExcept;
             if (info.HasAttribute<ReliableAttribute>()) flags |= CallSiteFlags.Reliable;
             if (info.HasAttribute<RefreshReplicableAttribute>()) flags |= CallSiteFlags.RefreshReplicable;
+            if (info.HasAttribute<BlockingAttribute>()) flags |= CallSiteFlags.Blocking;
 
             SerializeDelegate<T1, T2, T3, T4, T5, T6, T7> serializer = null;
             Func<T1, T2, T3, T4, T5, T6, T7, bool> validator = null;

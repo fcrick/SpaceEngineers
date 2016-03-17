@@ -43,6 +43,7 @@ namespace VRage.Audio
         float m_volumeHud;
         float m_volumeDefault;
         float m_volumeMusic;
+        float m_volumeVoiceChat;
 
         bool m_mute;
         bool m_musicAllowed;
@@ -97,12 +98,15 @@ namespace VRage.Audio
         event VolumeChangeHandler OnSetVolumeHud, OnSetVolumeGame, OnSetVolumeMusic;
 
 
-        Dictionary<MyCueId, MySoundData>.ValueCollection IMyAudio.CueDefinitions { get { return m_cueBank.CueDefinitions; } }
-        List<MyStringId> IMyAudio.GetCategories() { return m_cueBank.GetCategories(); }
-        MySoundData IMyAudio.GetCue(MyCueId cueId) { return m_cueBank.GetCue(cueId); }
+        Dictionary<MyCueId, MySoundData>.ValueCollection IMyAudio.CueDefinitions { get { return m_canPlay ? m_cueBank.CueDefinitions : null; } }
+        List<MyStringId> IMyAudio.GetCategories() { return m_canPlay ? m_cueBank.GetCategories() : null; }
+        MySoundData IMyAudio.GetCue(MyCueId cueId) { return m_canPlay ? m_cueBank.GetCue(cueId) : null; }
 
         public MySoundData SoloCue { get; set; }
         public bool GameSoundIsPaused { get; private set; }
+        public bool useLimiter = false;
+        public bool useSameSoundLimiter = false;
+        public int sameSoundLimiterCount = 3;
 
         volatile bool m_deviceLost = false;
         int m_lastDeviceCount = 0;
@@ -121,6 +125,7 @@ namespace VRage.Audio
             if (m_audioEngine != null)
             {
                 DisposeVoices();
+                m_audioEngine.CriticalError -= m_audioEngine_CriticalError;
                 m_audioEngine.Dispose();
             }
 
@@ -166,13 +171,16 @@ namespace VRage.Audio
 
             m_masterVoice = new MasteringVoice(m_audioEngine, deviceIndex: m_deviceNumber);
 
-            //var limiter = new SharpDX.XAPO.Fx.MasteringLimiter();
-            //var param = limiter.Parameter;
-            //param.Loudness = 10;
-            //limiter.Parameter = param;
-            //m_masterVoice.SetEffectChain(new EffectDescriptor[] { new EffectDescriptor(limiter) });
-            //m_masterVoice.EnableEffect(0);
-            ////limiter.Dispose();
+            if (useLimiter)
+            {
+                var limiter = new SharpDX.XAPO.Fx.MasteringLimiter();
+                var param = limiter.Parameter;
+                param.Loudness = 20;
+                limiter.Parameter = param;
+                m_masterVoice.SetEffectChain(new EffectDescriptor[] { new EffectDescriptor(limiter) });
+                m_masterVoice.EnableEffect(0);
+                //limiter.Dispose();
+            }
 
             m_calculateFlags = CalculateFlags.Matrix | CalculateFlags.Doppler;
             if ((m_deviceDetails.OutputFormat.ChannelMask & Speakers.LowFrequency) != 0)
@@ -329,6 +337,9 @@ namespace VRage.Audio
             if (m_canPlay)
             {
                 m_cueBank = new MyCueBank(m_audioEngine, sounds);
+                m_cueBank.useSameSoundLimiter = useSameSoundLimiter;
+                m_cueBank.sameSoundlimiterCount = sameSoundLimiterCount;
+                m_cueBank.SetSameSoundLimiter();
                 m_cueBank.DisablePooling = initParams.DisablePooling;
                 m_effectBank = new MyEffectBank(effects, m_audioEngine);
                 m_3Dsounds = new List<IMy3DSoundEmitter>();
@@ -374,9 +385,22 @@ namespace VRage.Audio
             MyLog.Default.WriteLine("MyAudio.LoadData - END");
         }
 
+        public void SetSameSoundLimiter()
+        {
+            if (m_cueBank != null)
+            {
+                m_cueBank.useSameSoundLimiter = useSameSoundLimiter;
+                m_cueBank.sameSoundlimiterCount = sameSoundLimiterCount;
+                m_cueBank.SetSameSoundLimiter();
+            }
+        }
+
         public void UnloadData()
         {
             MyLog.Default.WriteLine("MyAudio.UnloadData - START");
+
+            if (m_3Dsounds != null)
+                m_3Dsounds.Clear();
 
             if (m_canPlay)
             {
@@ -388,9 +412,10 @@ namespace VRage.Audio
             SoloCue = null;
 
             DisposeVoices();
-
+            //Debug.Assert(m_musicCue == null || m_musicCue.Voice == null || m_musicCue.Voice.IsDisposed);
             if (m_audioEngine != null)
             {
+                m_audioEngine.CriticalError -= m_audioEngine_CriticalError;
                 m_audioEngine.Dispose();
                 m_audioEngine = null;
             }
@@ -523,6 +548,19 @@ namespace VRage.Audio
             }
         }
 
+        
+        public float VolumeVoiceChat
+        {
+            get
+            {
+                return m_volumeVoiceChat;
+            }
+            set
+            {
+                m_volumeVoiceChat = MathHelper.Clamp(value, MyAudioConstants.VOICE_CHAT_VOLUME_MIN, MyAudioConstants.VOICE_CHAT_VOLUME_MAX);
+            }
+        }
+
         public bool EnableVoiceChat 
         { 
             get 
@@ -619,7 +657,13 @@ namespace VRage.Audio
             set { m_musicAllowed = value; }
         }
 
-        public void PlayMusic(MyMusicTrack? track = null)
+        public bool IsValidTransitionCategory(MyStringId transitionCategory, MyStringId musicCategory)
+        {
+            return m_canPlay ? m_cueBank.IsValidTransitionCategory(transitionCategory, musicCategory) : false;
+        }
+
+
+        public void PlayMusic(MyMusicTrack? track = null, int priorityForRandom = 0)
         {
             if (!m_canPlay)
                 return;
@@ -642,7 +686,7 @@ namespace VRage.Audio
             {
                 var transition = GetRandomTransitionEnum();
                 if (transition.HasValue)
-                    ApplyTransition(transition.Value, 0, null, false);
+                    ApplyTransition(transition.Value, priorityForRandom, null, false);
             }
         }
 
@@ -763,7 +807,8 @@ namespace VRage.Audio
                     {
                         // switches to another, random, track
                         m_currentTransition = null;
-                        MyStringId? newTransitionEnum = GetRandomTransitionEnum();
+                        //MyStringId? newTransitionEnum = GetRandomTransitionEnum();
+                        MyStringId? newTransitionEnum = MyStringId.GetOrCompute("Default");
                         if (newTransitionEnum.HasValue)
                             ApplyTransition(newTransitionEnum.Value, 0, null, false);
                     }
@@ -825,7 +870,7 @@ namespace VRage.Audio
             }
 
             // if category not set, we take random category from transition cues
-            MyStringId transitionCategory = category ?? m_cueBank.GetRandomTransitionCategory(transitionEnum);
+            MyStringId transitionCategory = category ?? m_cueBank.GetRandomTransitionCategory(ref transitionEnum);
             // we set this transition as next
             m_nextTransitions[priority] = new MyMusicTransition(priority, transitionEnum, transitionCategory);
             MyTrace.Send(TraceWindow.Server, string.Format("Applying transition {0} {1} (priority = {2})", transitionEnum, transitionCategory, priority));
@@ -883,11 +928,14 @@ namespace VRage.Audio
 
         private void PlayMusicByTransition(MyMusicTransition transition)
         {
-            m_musicCue = PlaySound(m_cueBank.GetTransitionCue(transition.TransitionEnum, transition.Category));
-            if (m_musicCue != null)
+            if (m_cueBank != null)
             {
-                m_musicCue.SetOutputVoices(m_musicAudioVoiceDesc);
-                m_musicAudioVoice.SetVolume(m_volumeMusic);
+                m_musicCue = PlaySound(m_cueBank.GetTransitionCue(transition.TransitionEnum, transition.Category));
+                if (m_musicCue != null)
+                {
+                    m_musicCue.SetOutputVoices(m_musicAudioVoiceDesc);
+                    m_musicAudioVoice.SetVolume(m_volumeMusic);
+                }
             }
         }
 
@@ -963,6 +1011,9 @@ namespace VRage.Audio
 
         public object CalculateDspSettingsDebug(IMy3DSoundEmitter source)
         {
+            if (m_cueBank == null) 
+                return null;
+
             MySoundData cue = m_cueBank.GetCue(source.SoundId);
             m_helperEmitter.UpdateValuesOmni(source.SourcePosition, source.Velocity, cue, m_deviceDetails.OutputFormat.Channels, source.CustomMaxDistance);
             DspSettingsRef result = new DspSettingsRef(1, m_deviceDetails.OutputFormat.Channels);
@@ -976,8 +1027,11 @@ namespace VRage.Audio
 
         private void Update3DCuePosition(IMy3DSoundEmitter source)
         {
+            if(m_cueBank == null) 
+                return;
+
             MySoundData cue = m_cueBank.GetCue(source.SoundId);
-            if (cue == null || source.Sound == null || !source.Sound.IsBuffered)
+            if (cue == null || source.Sound == null)// || !source.Sound.IsBuffered)
                 return;
 
             var sourceVoice = source.Sound as MySourceVoice;
@@ -988,13 +1042,13 @@ namespace VRage.Audio
             {
                 m_helperEmitter.UpdateValuesOmni(source.SourcePosition, source.Velocity, cue, m_deviceDetails.OutputFormat.Channels, source.CustomMaxDistance);
                 float maxDistance = source.CustomMaxDistance.HasValue ? source.CustomMaxDistance.Value : cue.MaxDistance;
-                m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, source.Sound.FrequencyRatio);
+                sourceVoice.distanceToListener = m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, source.Sound.FrequencyRatio, sourceVoice.Silent);
             }
             else
             {
                 float maxDistance = source.CustomMaxDistance.Value;
-                m_helperEmitter.UpdateValuesOmni(source.SourcePosition, source.Velocity, maxDistance, m_deviceDetails.OutputFormat.Channels, MyCurveType.Linear);
-                m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sourceVoice.FrequencyRatio);     
+                m_helperEmitter.UpdateValuesOmni(source.SourcePosition, source.Velocity, maxDistance, m_deviceDetails.OutputFormat.Channels, cue.VolumeCurve);
+                sourceVoice.distanceToListener = m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sourceVoice.FrequencyRatio, sourceVoice.Silent);     
             }
         }
 
@@ -1103,7 +1157,7 @@ namespace VRage.Audio
                 source.SourceChannels = 1;
                 if (originalType == MySoundDimensions.D2)
                     source.SourceChannels = 2;
-                m_x3dAudio.Apply3D(sound.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sound.FrequencyRatio);
+                sound.distanceToListener = m_x3dAudio.Apply3D(sound.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sound.FrequencyRatio, sound.Silent);
 
                 Update3DCuesState();
 
@@ -1150,7 +1204,7 @@ namespace VRage.Audio
             if (dimension == MySoundDimensions.D3)
             {
                 m_helperEmitter.UpdateValuesOmni(source.SourcePosition, source.Velocity, maxDistance, m_deviceDetails.OutputFormat.Channels, MyCurveType.Linear);
-                m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sourceVoice.FrequencyRatio);
+                sourceVoice.distanceToListener = m_x3dAudio.Apply3D(sourceVoice.Voice, m_listener, m_helperEmitter, source.SourceChannels, m_deviceDetails.OutputFormat.Channels, m_calculateFlags, maxDistance, sourceVoice.FrequencyRatio, sourceVoice.Silent);
                 Update3DCuesState();
                 Add3DCueToUpdateList(source);
 
@@ -1192,7 +1246,10 @@ namespace VRage.Audio
             if(cueIds != null)
                 foreach(var cueId in cueIds)
                 {
-                    voices.Add(GetSound(cueId, out waveNumber));
+                    var sound = GetSound(cueId, out waveNumber);
+                    System.Diagnostics.Debug.Assert(sound != null, "Missing sound " + cueId);
+                    if (sound != null)
+                        voices.Add(sound);
                 }
             return m_effectBank.CreateEffect(input, effect, voices.ToArray(), duration);
         }
